@@ -330,13 +330,19 @@ private:
 
 //==============================================================================
 /**
- * Subharmonic generator
+ * Subharmonic generator with Phase-Locked Loop (PLL)
  *
  * Adds:
- * - Octave-down component
- * - Fifth-down component
+ * - Octave-down component (phase-locked to fundamental)
+ * - Fifth-down component (phase-locked to fundamental)
  * - Unstable tracking (intentional)
  * - Creates "weight" and "body"
+ *
+ * PLL Implementation:
+ * - PI controller (Kp=0.1, Ki=0.001) for phase error correction
+ * - Wrap-around phase error detection [-0.5, 0.5]
+ * - Tracks fundamental phase independently
+ * - Eliminates phase drift over time
  */
 class SubharmonicGenerator
 {
@@ -365,9 +371,22 @@ public:
 private:
     Parameters params;
 
-    // Subharmonic oscillators
+    // Fundamental phase tracking (for PLL reference)
+    float fundamentalPhase = 0.0f;
+
+    // Subharmonic oscillators (with PLL correction)
     float octavePhase = 0.0f;
     float fifthPhase = 0.0f;
+
+    // PLL state for octave (ratio = 0.5)
+    float octaveIntegral = 0.0f;       // Integral accumulator
+
+    // PLL state for fifth (ratio = 2/3)
+    float fifthIntegral = 0.0f;        // Integral accumulator
+
+    // PLL gains
+    static constexpr float pllKp = 0.1f;   // Proportional gain
+    static constexpr float pllKi = 0.001f;  // Integral gain
 
     // Instability
     float currentOctaveShift = 1.0f;
@@ -378,6 +397,15 @@ private:
     double sr = 48000.0;
 
     void updateInstability();
+
+    /** Wrap phase error to [-0.5, 0.5] range */
+    static inline float wrapPhaseError(float error)
+    {
+        // Wrap to [-0.5, 0.5] for shortest path correction
+        while (error > 0.5f) error -= 1.0f;
+        while (error < -0.5f) error += 1.0f;
+        return error;
+    }
 };
 
 //==============================================================================

@@ -945,8 +945,11 @@ void SubharmonicGenerator::prepare(double sampleRate)
 
 void SubharmonicGenerator::reset()
 {
+    fundamentalPhase = 0.0f;
     octavePhase = 0.0f;
     fifthPhase = 0.0f;
+    octaveIntegral = 0.0f;
+    fifthIntegral = 0.0f;
     currentOctaveShift = 1.0f;
     currentFifthShift = 1.0f;
 }
@@ -958,22 +961,68 @@ float SubharmonicGenerator::processSample(float input, float fundamental)
 
     updateInstability();
 
-    // Generate octave down
-    float octaveFreq = fundamental * 0.5f * currentOctaveShift;
-    float octaveIncrement = octaveFreq / static_cast<float>(sr);
-    octavePhase += octaveIncrement;
-    if (octavePhase >= 1.0f)
-        octavePhase -= 1.0f;
+    // Track fundamental phase (reference for PLL)
+    float fundamentalIncrement = fundamental / static_cast<float>(sr);
+    fundamentalPhase += fundamentalIncrement;
+    if (fundamentalPhase >= 1.0f)
+        fundamentalPhase -= 1.0f;
 
+    // --- Octave-down PLL (ratio = 0.5) ---
+    if (params.octaveMix > 0.0f)
+    {
+        // Expected phase if perfectly locked: fundamental / 2
+        float expectedOctavePhase = fmod(fundamentalPhase / 0.5f, 1.0f);
+
+        // Phase error: measured - expected
+        float octaveError = wrapPhaseError(octavePhase - expectedOctavePhase);
+
+        // PI controller: correct increment
+        float nominalOctaveInc = (fundamental * 0.5f * currentOctaveShift) / static_cast<float>(sr);
+
+        // Update integral (with anti-windup clamping)
+        octaveIntegral += octaveError;
+        octaveIntegral = clamp(octaveIntegral, -0.1f, 0.1f);
+
+        // Corrected increment with PI control
+        float correctedOctaveInc = nominalOctaveInc + pllKp * octaveError + pllKi * octaveIntegral;
+
+        // Advance phase with corrected increment
+        octavePhase += correctedOctaveInc;
+        if (octavePhase >= 1.0f)
+            octavePhase -= 1.0f;
+        else if (octavePhase < 0.0f)
+            octavePhase += 1.0f;
+    }
+
+    // --- Fifth-down PLL (ratio = 2/3) ---
+    if (params.fifthMix > 0.0f)
+    {
+        // Expected phase if perfectly locked: fundamental * (2/3)
+        float expectedFifthPhase = fmod(fundamentalPhase / (1.0f / 0.6666667f), 1.0f);
+
+        // Phase error: measured - expected
+        float fifthError = wrapPhaseError(fifthPhase - expectedFifthPhase);
+
+        // PI controller: correct increment
+        float nominalFifthInc = (fundamental * 0.6666667f * currentFifthShift) / static_cast<float>(sr);
+
+        // Update integral (with anti-windup clamping)
+        fifthIntegral += fifthError;
+        fifthIntegral = clamp(fifthIntegral, -0.1f, 0.1f);
+
+        // Corrected increment with PI control
+        float correctedFifthInc = nominalFifthInc + pllKp * fifthError + pllKi * fifthIntegral;
+
+        // Advance phase with corrected increment
+        fifthPhase += correctedFifthInc;
+        if (fifthPhase >= 1.0f)
+            fifthPhase -= 1.0f;
+        else if (fifthPhase < 0.0f)
+            fifthPhase += 1.0f;
+    }
+
+    // Generate subharmonic waveforms
     float octave = SchillingerEcosystem::DSP::fastSineLookup(octavePhase * 6.28318530718f);
-
-    // Generate fifth down
-    float fifthFreq = fundamental * 0.6666667f * currentFifthShift;
-    float fifthIncrement = fifthFreq / static_cast<float>(sr);
-    fifthPhase += fifthIncrement;
-    if (fifthPhase >= 1.0f)
-        fifthPhase -= 1.0f;
-
     float fifth = SchillingerEcosystem::DSP::fastSineLookup(fifthPhase * 6.28318530718f);
 
     // Mix subharmonics
